@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   sync:
+    if: github.ref == 'refs/heads/master'   # 只允许 master 触发，避免把其他分支状态推到 master
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,7 +59,7 @@ jobs:
           }
           rename_of() { # 远端资产名 -> 本地文件名（去分支前缀等，符合 <name>-<version>-r<N>.apk 规范），默认原样
             case "$1" in
-              openwrt-passwall) echo "$2" | sed 's/^25\.12\+_//' ;;
+              openwrt-passwall) echo "$2" | sed 's/^25\.12+_//' ;; # BRE 中 + 是字面量（GNU sed 的 \+ 是量词），勿写 \+
               *)                echo "$2" ;;
             esac
           }
@@ -76,7 +77,10 @@ jobs:
             mkdir -p "$dir"
             echo "== $repo ($(repo_of "$repo")) -> $dir [filter: $filter] =="
             json=$(api_get "https://api.github.com/repos/$(repo_of "$repo")/releases/latest")
-            printf '%s' "$json" | apk_list | grep -E "$filter" > "$TMP/list.txt"
+            if ! printf '%s' "$json" | apk_list | grep -E "$filter" > "$TMP/list.txt"; then
+              echo "  警告：无匹配资产（filter: $filter），跳过 $repo（不下载不删除）"
+              continue
+            fi
             # 远端资产名 -> 本地文件名（rename_of），后续下载/删除/更新统一用本地名
             while IFS=$'\t' read -r name url; do
               [ -n "$name" ] || continue
@@ -84,20 +88,23 @@ jobs:
             done < "$TMP/list.txt" > "$TMP/list-local.txt" && mv "$TMP/list-local.txt" "$TMP/list.txt"
             while IFS=$'\t' read -r name url; do
               [ -n "$name" ] || continue
-              curl -fsSL --max-time 120 -o "$TMP/$name" "$url"
+              curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --max-time 120 -o "$TMP/$name" "$url"
               echo "  downloaded: $name"
             done < "$TMP/list.txt"
             cut -f1 "$TMP/list.txt" > "$TMP/remote-names.txt"
             preserve=$(preserve_of "$repo")
-            for f in "$dir"/*.apk; do
-              [ -e "$f" ] || continue
+            # 只对齐 git 跟踪的文件，未跟踪的手工文件（临时放置）不动
+            # 注意：pathspec 必须是 "$dir/*.apk"（单模式限定目录），写成 "$dir" '*.apk' 两个模式是 OR 关系，会匹配全仓库
+            git ls-files -- "$dir/*.apk" > "$TMP/tracked.txt"
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
               base=$(basename "$f")
               if ! grep -qx "$base" "$TMP/remote-names.txt" && ! printf '%s\n' "$base" | grep -qE "$preserve"; then
-                rm -f -- "$f"
+                rm -f -- "$f" # $f 已是相对仓库根路径（git ls-files 输出），不能加 $dir/ 前缀
                 echo "  removed: $base"
                 CHANGED=1
               fi
-            done
+            done < "$TMP/tracked.txt"
             while IFS=$'\t' read -r name url; do
               [ -n "$name" ] || continue
               if [ ! -f "$dir/$name" ] || ! cmp -s "$TMP/$name" "$dir/$name"; then
@@ -106,13 +113,36 @@ jobs:
                 CHANGED=1
               fi
             done < "$TMP/list.txt"
+            # 记录远端资产（带目录前缀），提交时只 add 这些 + 已跟踪文件的变更
+            cut -f1 "$TMP/list.txt" | sed "s|^|$dir/|" >> "$TMP/to-add.txt"
           done
           if [ "$CHANGED" = "1" ]; then
             git config user.name "szwjp"
             git config user.email "szwjp@users.noreply.github.com"
-            git add -A homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall
+            # 只提交远端资产（to-add.txt）与已跟踪文件的变更；未跟踪的手工文件（临时放置）不进版本库，避免下轮被误删
+            # add -u 按目录逐个执行：全新目录（尚无已跟踪文件）会 pathspec 报错，忽略且不影响其他目录
+            for d in homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall; do
+              git add -u -- "$d" 2>/dev/null || true
+            done
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              git add -- "$f" 2>/dev/null || true
+            done < "$TMP/to-add.txt"
             git commit -m "sync: refresh apks from upstream latest releases"
-            git push origin master
+            pushed=0
+            for i in 1 2 3; do
+              # pull --rebase 吸收并发提交，避免浅克隆 push 非快进失败；失败自动重试
+              if git pull --rebase origin master && git push origin master; then
+                pushed=1
+                break
+              fi
+              echo "  push 失败，5 秒后重试 ($i/3)"
+              sleep 5
+            done
+            if [ "$pushed" != "1" ]; then
+              echo ">>> 推送失败：本地已提交但未能推送，需要人工处理"
+              exit 1
+            fi
             echo ">>> 已提交并推送"
           else
             echo ">>> 无变化，跳过"
