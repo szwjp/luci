@@ -22,15 +22,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # 四个自维护项目 latest Release 的 apk 同步到对应目录
-          # 远端已不存在的 apk 删除；内容不同才覆盖；无变化不提交
-          PROJECTS="homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd"
+          # 自维护项目 latest Release 的 apk 同步到对应目录。
+          # 每项目资产过滤：filter_of 指定匹配模式，未匹配的资产（其他 i18n/依赖合集）不下载。
+          # 远端（过滤后）已不存在的 apk 删除；内容不同才覆盖；无变化不提交。
+          PROJECTS="homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2"
+          repo_of() {
+            case "$1" in
+              openwrt-passwall2) echo "Openwrt-Passwall/openwrt-passwall2" ;;
+              *)                 echo "szwjp/$1" ;;
+            esac
+          }
           dir_of() {
             case "$1" in
               homeproxy)               echo homeproxy ;;
               luci-app-openvpn-server) echo openvpn-server ;;
               luci-app-quickfile)      echo quickfile ;;
               luci-app-ipsec-vpnd)     echo ipsec-vpnd ;;
+              openwrt-passwall2)       echo passwall2 ;;
+            esac
+          }
+          filter_of() { # 资产名过滤模式（grep -E），默认全量 apk
+            case "$1" in
+              openwrt-passwall2) echo 'luci-app-passwall2-.*\.apk|luci-i18n-passwall2-zh-cn-.*\.apk' ;;
+              *)                 echo '.*\.apk' ;;
             esac
           }
           TMP=$(mktemp -d)
@@ -40,20 +54,20 @@ jobs:
             curl -fsSL --max-time 30 "$1" 2>/dev/null \
               || curl -fsSL --max-time 30 -H "Authorization: Bearer ${GH_TOKEN:-}" "$1"
           }
-          apk_urls() { python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(a["browser_download_url"] for a in d["assets"] if a["name"].endswith(".apk")))'; }
-          apk_names() { python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(a["name"] for a in d["assets"] if a["name"].endswith(".apk")))'; }
+          apk_list() { python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(a["name"]+"\t"+a["browser_download_url"] for a in d["assets"] if a["name"].endswith(".apk")))'; }
           for repo in $PROJECTS; do
             dir=$(dir_of "$repo")
+            filter=$(filter_of "$repo")
             mkdir -p "$dir"
-            echo "== $repo -> $dir =="
-            json=$(api_get "https://api.github.com/repos/szwjp/$repo/releases/latest")
-            while IFS= read -r url; do
-              [ -n "$url" ] || continue
-              name=$(basename "$url")
+            echo "== $repo ($(repo_of "$repo")) -> $dir [filter: $filter] =="
+            json=$(api_get "https://api.github.com/repos/$(repo_of "$repo")/releases/latest")
+            printf '%s' "$json" | apk_list | grep -E "$filter" > "$TMP/list.txt"
+            while IFS=$'\t' read -r name url; do
+              [ -n "$name" ] || continue
               curl -fsSL --max-time 120 -o "$TMP/$name" "$url"
               echo "  downloaded: $name"
-            done < <(printf '%s' "$json" | apk_urls)
-            printf '%s' "$json" | apk_names > "$TMP/remote-names.txt"
+            done < "$TMP/list.txt"
+            cut -f1 "$TMP/list.txt" > "$TMP/remote-names.txt"
             for f in "$dir"/*.apk; do
               [ -e "$f" ] || continue
               base=$(basename "$f")
@@ -63,19 +77,19 @@ jobs:
                 CHANGED=1
               fi
             done
-            while IFS= read -r name; do
+            while IFS=$'\t' read -r name url; do
               [ -n "$name" ] || continue
               if [ ! -f "$dir/$name" ] || ! cmp -s "$TMP/$name" "$dir/$name"; then
                 cp "$TMP/$name" "$dir/$name"
                 echo "  updated: $name"
                 CHANGED=1
               fi
-            done < "$TMP/remote-names.txt"
+            done < "$TMP/list.txt"
           done
           if [ "$CHANGED" = "1" ]; then
             git config user.name "szwjp"
             git config user.email "szwjp@users.noreply.github.com"
-            git add -A homeproxy openvpn-server quickfile ipsec-vpnd
+            git add -A homeproxy openvpn-server quickfile ipsec-vpnd passwall2
             git commit -m "sync: refresh apks from upstream latest releases"
             git push origin master
             echo ">>> 已提交并推送"
