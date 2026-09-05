@@ -26,7 +26,7 @@ jobs:
           # 自维护项目 latest Release 的 apk 同步到对应目录。
           # 每项目资产过滤：filter_of 指定匹配模式，未匹配的资产（其他 i18n/依赖合集）不下载。
           # 远端（过滤后）已不存在的 apk 删除；内容不同才覆盖；无变化不提交。
-          PROJECTS="homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall"
+          PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall"
           repo_of() {
             case "$1" in
               openwrt-passwall2)  echo "Openwrt-Passwall/openwrt-passwall2" ;;
@@ -36,7 +36,7 @@ jobs:
           }
           dir_of() {
             case "$1" in
-              homeproxy)               echo homeproxy ;;
+              luci-app-homeproxy)      echo homeproxy ;;
               luci-app-openvpn-server) echo openvpn-server ;;
               luci-app-quickfile)      echo quickfile ;;
               luci-app-ipsec-vpnd)     echo ipsec-vpnd ;;
