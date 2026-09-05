@@ -23,14 +23,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # 自维护项目 latest Release 的 apk 同步到对应目录。
+          # 各项目 latest Release 的 apk 同步到对应目录（sing-box 为官方 SagerNet Release）。
           # 每项目资产过滤：filter_of 指定匹配模式，未匹配的资产（其他 i18n/依赖合集）不下载。
           # 远端（过滤后）已不存在的 apk 删除；内容不同才覆盖；无变化不提交。
-          PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall"
+          PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall sing-box"
           repo_of() {
             case "$1" in
               openwrt-passwall2)  echo "Openwrt-Passwall/openwrt-passwall2" ;;
               openwrt-passwall)   echo "Openwrt-Passwall/openwrt-passwall" ;;
+              sing-box)           echo "SagerNet/sing-box" ;;
               *)                  echo "szwjp/$1" ;;
             esac
           }
@@ -42,12 +43,14 @@ jobs:
               luci-app-ipsec-vpnd)     echo ipsec-vpnd ;;
               openwrt-passwall2)       echo passwall2 ;;
               openwrt-passwall)        echo passwall ;;
+              sing-box)                echo sing-box ;;
             esac
           }
           filter_of() { # 资产名过滤模式（grep -E），默认全量 apk
             case "$1" in
               openwrt-passwall2) echo 'luci-app-passwall2-.*\.apk|luci-i18n-passwall2-zh-cn-.*\.apk' ;;
               openwrt-passwall)  echo '25\.12\+_luci-app-passwall-.*\.apk|25\.12\+_luci-i18n-passwall-zh-cn-.*\.apk' ;;
+              sing-box)          echo '^sing-box_.*_openwrt_x86_64\.apk$' ;;
               *)                 echo '.*\.apk' ;;
             esac
           }
@@ -121,7 +124,7 @@ jobs:
             git config user.email "szwjp@users.noreply.github.com"
             # 只提交远端资产（to-add.txt）与已跟踪文件的变更；未跟踪的手工文件（临时放置）不进版本库，避免下轮被误删
             # add -u 按目录逐个执行：全新目录（尚无已跟踪文件）会 pathspec 报错，忽略且不影响其他目录
-            for d in homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall; do
+            for d in homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall sing-box; do
               git add -u -- "$d" 2>/dev/null || true
             done
             while IFS= read -r f; do
