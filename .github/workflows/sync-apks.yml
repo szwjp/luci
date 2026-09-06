@@ -26,12 +26,13 @@ jobs:
           # 各项目 latest Release 的 apk 同步到对应目录（sing-box 为官方 SagerNet Release）。
           # 每项目资产过滤：filter_of 指定匹配模式，未匹配的资产（其他 i18n/依赖合集）不下载。
           # 远端（过滤后）已不存在的 apk 删除；内容不同才覆盖；无变化不提交。
-          PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall sing-box"
+          PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall sing-box bandix"
           repo_of() {
             case "$1" in
               openwrt-passwall2)  echo "Openwrt-Passwall/openwrt-passwall2" ;;
               openwrt-passwall)   echo "Openwrt-Passwall/openwrt-passwall" ;;
               sing-box)           echo "SagerNet/sing-box" ;;
+              bandix)             echo "timsaya/luci-app-bandix" ;;
               *)                  echo "szwjp/$1" ;;
             esac
           }
@@ -44,6 +45,7 @@ jobs:
               openwrt-passwall2)       echo passwall2 ;;
               openwrt-passwall)        echo passwall ;;
               sing-box)                echo sing-box ;;
+              bandix)                  echo bandix ;;
             esac
           }
           filter_of() { # 资产名过滤模式（grep -E），默认全量 apk
@@ -51,18 +53,21 @@ jobs:
               openwrt-passwall2) echo 'luci-app-passwall2-.*\.apk|luci-i18n-passwall2-zh-cn-.*\.apk' ;;
               openwrt-passwall)  echo '25\.12\+_luci-app-passwall-.*\.apk|25\.12\+_luci-i18n-passwall-zh-cn-.*\.apk' ;;
               sing-box)          echo '^sing-box_.*_openwrt_x86_64\.apk$' ;;
+              bandix)            echo '^luci-app-bandix-.*_all\.apk$|^luci-i18n-bandix-zh-cn-.*_all\.apk$' ;;
               *)                 echo '.*\.apk' ;;
             esac
           }
           preserve_of() { # 本地手工维护、删除对齐时需保留的资产模式（grep -E），默认不保留任何
             case "$1" in
               openwrt-passwall) echo '^(chinadns-ng|dns2socks|geoview|tcping|v2ray-geoip|v2ray-geosite)-' ;;
+              bandix)           echo '^bandix-' ;; # 本地手工维护的核心包，上游 latest 不发布该资产
               *)                echo '^$' ;;
             esac
           }
           rename_of() { # 远端资产名 -> 本地文件名（去分支前缀等，符合 <name>-<version>-r<N>.apk 规范），默认原样
             case "$1" in
               openwrt-passwall) echo "$2" | sed 's/^25\.12+_//' ;; # BRE 中 + 是字面量（GNU sed 的 \+ 是量词），勿写 \+
+              bandix)           echo "$2" | sed 's/\.\([0-9a-f]\{7\}\)_all\.apk$/~\1_all.apk/' ;; # 上游用 . 分隔提交号，本地按 ~ 惯例
               *)                echo "$2" ;;
             esac
           }
@@ -124,7 +129,7 @@ jobs:
             git config user.email "szwjp@users.noreply.github.com"
             # 只提交远端资产（to-add.txt）与已跟踪文件的变更；未跟踪的手工文件（临时放置）不进版本库，避免下轮被误删
             # add -u 按目录逐个执行：全新目录（尚无已跟踪文件）会 pathspec 报错，忽略且不影响其他目录
-            for d in homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall sing-box; do
+            for d in homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall sing-box bandix; do
               git add -u -- "$d" 2>/dev/null || true
             done
             while IFS= read -r f; do
