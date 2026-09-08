@@ -12,19 +12,29 @@ jobs:
   sync:
     if: github.ref == 'refs/heads/master'   # 只允许 master 触发，避免把其他分支状态推到 master
     runs-on: ubuntu-latest
+    # 在 alpine 容器内运行：其自带 apk-tools v3（apk adbdump 可读取任意 apk 包内部的规范 name/version 元数据），
+    # 用于把从任何源仓库下载的 apk 文件名统一规范化为 <name>-<version>-r<N>.apk（version 已含 -r<N> 时即为此形式）。
+    # 注意：apk-tools v2 不支持 adbdump，且 v2 的包命名与 v3 不一致，故必须用 v3。
+    container: alpine:3.23
     steps:
+      - name: Install prerequisites
+        run: apk add --no-cache git curl python3 bash
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Sync apks
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # 各项目 latest Release 的 apk 同步到对应目录（sing-box 为官方 SagerNet Release）。
           # 每项目资产过滤：filter_of 指定匹配模式，未匹配的资产（其他 i18n/依赖合集）不下载。
+          # 文件名一律用 apk-tools v3 读取包内部 name/version 规范化：任何源仓库只要产出的是合法 apk，
+          #   下载后都会被统一改名为 <name>-<version>-r<N>.apk，从而避免上游不规范命名（如 *_all.apk、*_openwrt_x86_64.apk）导致 ImageBuilder 里 "package mentioned in index not found"。
           # 远端（过滤后）已不存在的 apk 删除；内容不同才覆盖；无变化不提交。
           PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall sing-box bandix"
           repo_of() {
@@ -65,12 +75,15 @@ jobs:
               *)                echo '^$' ;;
             esac
           }
-          rename_of() { # 远端资产名 -> 本地文件名（去分支前缀等，符合 <name>-<version>-r<N>.apk 规范），默认原样
-            case "$1" in
-              openwrt-passwall) echo "$2" | sed 's/^25\.12+_//' ;; # BRE 中 + 是字面量（GNU sed 的 \+ 是量词），勿写 \+
-              bandix)           echo "$2" | sed 's/\.\([0-9a-f]\{7\}\)_all\.apk$/~\1_all.apk/' ;; # 上游用 . 分隔提交号，本地按 ~ 惯例
-              *)                echo "$2" ;;
-            esac
+          # 用 apk-tools v3 读取包内部 name/version，统一规范为 <name>-<version>.apk（version 含 -r<N> 时即为 <name>-<version>-r<N>.apk）。
+          # 以包内元数据为准，而非下载文件名，故能规整任何上游的命名（*_all.apk、*_openwrt_x86_64.apk、带分支前缀等）。
+          apk_normalize() {
+            local f="$1" n v out
+            out=$(apk adbdump "$f" 2>/dev/null) || return 1
+            n=$(printf '%s\n' "$out" | sed -n 's/^  name: //p' | head -1)
+            v=$(printf '%s\n' "$out" | sed -n 's/^  version: //p' | head -1)
+            [ -n "$n" ] && [ -n "$v" ] || return 1
+            printf '%s-%s.apk' "$n" "$v"
           }
           TMP=$(mktemp -d)
           trap 'rm -rf "$TMP"' EXIT
@@ -90,16 +103,21 @@ jobs:
               echo "  警告：无匹配资产（filter: $filter），跳过 $repo（不下载不删除）"
               continue
             fi
-            # 远端资产名 -> 本地文件名（rename_of），后续下载/删除/更新统一用本地名
-            while IFS=$'\t' read -r name url; do
-              [ -n "$name" ] || continue
-              printf '%s\t%s\n' "$(rename_of "$repo" "$name")" "$url"
-            done < "$TMP/list.txt" > "$TMP/list-local.txt" && mv "$TMP/list-local.txt" "$TMP/list.txt"
+            # 下载远端资产 -> 用 apk-tools v3 规范化为 <name>-<version>.apk；list.txt 统一为规范名（后续删除/更新/对齐均用规范名）
             while IFS=$'\t' read -r name url; do
               [ -n "$name" ] || continue
               curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --max-time 120 -o "$TMP/$name" "$url"
-              echo "  downloaded: $name"
-            done < "$TMP/list.txt"
+              canon=$(apk_normalize "$TMP/$name") || {
+                echo "  ERROR: 无法读取 $name 的包元数据（apk adbdump 失败），中止同步以便人工排查" >&2
+                exit 1
+              }
+              if [ "$name" != "$canon" ]; then
+                rm -f "$TMP/$canon"
+                mv "$TMP/$name" "$TMP/$canon"
+                echo "  normalized: $name -> $canon"
+              fi
+              printf '%s\t%s\n' "$canon" "$url"
+            done < "$TMP/list.txt" > "$TMP/list-local.txt" && mv "$TMP/list-local.txt" "$TMP/list.txt"
             cut -f1 "$TMP/list.txt" > "$TMP/remote-names.txt"
             preserve=$(preserve_of "$repo")
             # 只对齐 git 跟踪的文件，未跟踪的手工文件（临时放置）不动
