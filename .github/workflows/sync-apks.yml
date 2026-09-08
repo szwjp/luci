@@ -61,6 +61,7 @@ jobs:
             case "$1" in
               openwrt-passwall) echo '^(chinadns-ng|dns2socks|geoview|tcping|v2ray-geoip|v2ray-geosite)-' ;;
               bandix)           echo '^bandix-' ;; # 本地手工维护的核心包，上游 latest 不发布该资产
+              luci-app-ipsec-vpnd) echo '^(strongswan-|kmod-tun-)' ;; # 运行时依赖:strongswan 元包 + 各 mod,以及内核 tun/tap 模块。这些不在 szwjp/luci-app-ipsec-vpnd latest release 里(分别由 OpenWrt/ImmortalWrt 25.12 feed 提供),sync 时必须保留
               *)                echo '^$' ;;
             esac
           }
