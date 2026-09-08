@@ -31,6 +31,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # 容器内工作区属主与容器用户不同，git 会报 'dubious ownership'，需显式信任
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           # 各项目 latest Release 的 apk 同步到对应目录（sing-box 为官方 SagerNet Release）。
           # 每项目资产过滤：filter_of 指定匹配模式，未匹配的资产（其他 i18n/依赖合集）不下载。
           # 文件名一律用 apk-tools v3 读取包内部 name/version 规范化：任何源仓库只要产出的是合法 apk，
