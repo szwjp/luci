@@ -116,7 +116,7 @@ jobs:
               if [ "$name" != "$canon" ]; then
                 rm -f "$TMP/$canon"
                 mv "$TMP/$name" "$TMP/$canon"
-                echo "  normalized: $name -> $canon"
+                echo "  normalized: $name -> $canon" >&2
               fi
               printf '%s\t%s\n' "$canon" "$url"
             done < "$TMP/list.txt" > "$TMP/list-local.txt" && mv "$TMP/list-local.txt" "$TMP/list.txt"
