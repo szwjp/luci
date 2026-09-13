@@ -38,7 +38,7 @@ jobs:
           # 文件名一律用 apk-tools v3 读取包内部 name/version 规范化：任何源仓库只要产出的是合法 apk，
           #   下载后都会被统一改名为 <name>-<version>-r<N>.apk，从而避免上游不规范命名（如 *_all.apk、*_openwrt_x86_64.apk）导致 ImageBuilder 里 "package mentioned in index not found"。
           # 远端（过滤后）已不存在的 apk 删除；内容不同才覆盖；无变化不提交。
-          PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall sing-box bandix"
+          PROJECTS="luci-app-homeproxy luci-app-openvpn-server luci-app-quickfile luci-app-ipsec-vpnd openwrt-passwall2 openwrt-passwall sing-box bandix lucky"
           repo_of() {
             case "$1" in
               openwrt-passwall2)  echo "Openwrt-Passwall/openwrt-passwall2" ;;
@@ -58,6 +58,17 @@ jobs:
               openwrt-passwall)        echo passwall ;;
               sing-box)                echo sing-box ;;
               bandix)                  echo bandix ;;
+              lucky)                   echo lucky ;;
+            esac
+          }
+          # 少数项目的 Release 不是单一的 latest，需要另行挑选：
+          #   lucky: 该仓库按架构各发一个 release（最新发布的是 i386），而 feed 只要 x86_64，
+          #          故按发布时间倒序取最新的 x86_64-* release。
+          release_of() {
+            case "$1" in
+              lucky) printf '%s' "$(api_get "https://api.github.com/repos/$(repo_of "$1")/releases?per_page=100" \
+                | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r["tag_name"].startswith("x86_64-")]; rs.sort(key=lambda r: r["published_at"] or "", reverse=True); print(json.dumps(rs[0]) if rs else "")')" ;;
+              *)     api_get "https://api.github.com/repos/$(repo_of "$1")/releases/latest" ;;
             esac
           }
           filter_of() { # 资产名过滤模式（grep -E），默认全量 apk
@@ -66,6 +77,7 @@ jobs:
               openwrt-passwall)  echo '25\.12\+_luci-app-passwall-.*\.apk|25\.12\+_luci-i18n-passwall-zh-cn-.*\.apk' ;;
               sing-box)          echo '^sing-box_.*_openwrt_x86_64\.apk$' ;;
               bandix)            echo '^luci-app-bandix-.*_all\.apk$|^luci-i18n-bandix-zh-cn-.*_all\.apk$' ;;
+              lucky)             echo '^x86_64-(lucky|luci-app-lucky|luci-i18n-lucky-zh-cn)-.*\.apk$' ;; # 只要 x86_64 的三个包
               *)                 echo '.*\.apk' ;;
             esac
           }
@@ -74,6 +86,7 @@ jobs:
               openwrt-passwall) echo '^(chinadns-ng|dns2socks|geoview|tcping|v2ray-geoip|v2ray-geosite)-' ;;
               bandix)           echo '^bandix-' ;; # 本地手工维护的核心包，上游 latest 不发布该资产
               luci-app-ipsec-vpnd) echo '^(strongswan-|kmod-tun-)' ;; # 运行时依赖:strongswan 元包 + 各 mod,以及内核 tun/tap 模块。这些不在 szwjp/luci-app-ipsec-vpnd latest release 里(分别由 OpenWrt/ImmortalWrt 25.12 feed 提供),sync 时必须保留
+              lucky)             echo '^$' ;; # 旧版本必须删除，不保留任何本地文件
               *)                echo '^$' ;;
             esac
           }
@@ -100,7 +113,11 @@ jobs:
             filter=$(filter_of "$repo")
             mkdir -p "$dir"
             echo "== $repo ($(repo_of "$repo")) -> $dir [filter: $filter] =="
-            json=$(api_get "https://api.github.com/repos/$(repo_of "$repo")/releases/latest")
+            json=$(release_of "$repo")
+            if [ -z "$json" ]; then
+              echo "  警告：找不到可用 release（repo: $(repo_of "$repo")），跳过 $repo（不下载不删除）"
+              continue
+            fi
             if ! printf '%s' "$json" | apk_list | grep -E "$filter" > "$TMP/list.txt"; then
               echo "  警告：无匹配资产（filter: $filter），跳过 $repo（不下载不删除）"
               continue
@@ -150,7 +167,7 @@ jobs:
             git config user.email "szwjp@users.noreply.github.com"
             # 只提交远端资产（to-add.txt）与已跟踪文件的变更；未跟踪的手工文件（临时放置）不进版本库，避免下轮被误删
             # add -u 按目录逐个执行：全新目录（尚无已跟踪文件）会 pathspec 报错，忽略且不影响其他目录
-            for d in homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall sing-box bandix; do
+            for d in homeproxy openvpn-server quickfile ipsec-vpnd passwall2 passwall sing-box bandix lucky; do
               git add -u -- "$d" 2>/dev/null || true
             done
             while IFS= read -r f; do
