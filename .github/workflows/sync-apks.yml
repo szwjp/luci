@@ -45,6 +45,7 @@ jobs:
               openwrt-passwall)   echo "Openwrt-Passwall/openwrt-passwall" ;;
               sing-box)           echo "SagerNet/sing-box" ;;
               bandix)             echo "timsaya/luci-app-bandix" ;;
+              lucky)              echo "szwjp/luci-app-lucky" ;; # lucky 的包发在这个仓库，不在 szwjp/lucky
               *)                  echo "szwjp/$1" ;;
             esac
           }
@@ -61,9 +62,9 @@ jobs:
               lucky)                   echo lucky ;;
             esac
           }
-          # 少数项目的 Release 不是单一的 latest，需要另行挑选：
-          #   lucky: 该仓库按架构各发一个 release（最新发布的是 i386），而 feed 只要 x86_64，
-          #          故按发布时间倒序取最新的 x86_64-* release。
+          # 各项目默认取 latest release。lucky 例外：它每个架构各发一个 release，
+          # 发布顺序里最后一个是 i386，latest 并不指向 x86_64，因此按发布时间倒序取最新的
+          # x86_64-* release，再用 filter_of 限定只下载 x86_64 的三个包。
           release_of() {
             case "$1" in
               lucky) printf '%s' "$(api_get "https://api.github.com/repos/$(repo_of "$1")/releases?per_page=100" \
